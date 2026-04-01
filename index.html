@@ -58,6 +58,17 @@
         const ctx = canvas.getContext('2d');
         const loadingText = document.getElementById('loading');
 
+        // 音效檔案設定
+        const sndRotate = new Audio('linhmitto-bubblepop-254773.mp3');
+        const sndLock = new Audio('freesound_community-c-chord-83638.mp3');
+        const sndComplete = new Audio('bombinsound-happy-kids-background-music-09-second-499549.mp3');
+
+        // 播放音效的輔助函式 (重設時間以支援快速重複播放)
+        function playSnd(audioObj) {
+            audioObj.currentTime = 0;
+            audioObj.play().catch(e => console.log('音效播放被瀏覽器阻擋或找不到檔案:', e));
+        }
+
         // 動態排版參數
         let BOARD_W, BOARD_H, BOARD_X, BOARD_Y;
         let ERROR_MARGIN_X, ERROR_MARGIN_Y;
@@ -203,36 +214,36 @@
             ctx.closePath();
         }
 
-        // 觸發煙火與任務完成動畫的函式 (已強化)
+        // 觸發煙火與任務完成動畫的函式
         function triggerFireworks(zone) {
             const cx = BOARD_X + (zone.x + zone.w / 2) * BOARD_W;
             const cy = BOARD_Y + (zone.y + zone.h / 2) * BOARD_H;
 
             missionCompleteTimers.push({
-                timer: 90, // 文字動畫維持約 1.5 秒 (時間縮短一半)
+                timer: 90, // 文字動畫維持約 1.5 秒
                 cx: cx,
                 cy: cy
             });
 
-            // 連續爆發 2 波煙火 (改為 2 波)
+            // 連續爆發 2 波煙火
             for(let wave = 0; wave < 2; wave++) {
                 setTimeout(() => {
-                    for (let i = 0; i < 150; i++) { // 每波 150 個粒子，增強華麗感
+                    for (let i = 0; i < 150; i++) {
                         const angle = Math.random() * Math.PI * 2;
-                        const speed = Math.random() * 12 + 2; // 爆發範圍更廣
+                        const speed = Math.random() * 12 + 2;
                         const colors = ['#FFD700', '#FFA500', '#FF4500', '#FFFFFF', '#00FF00', '#00FFFF', '#FF00FF', '#FF1493'];
                         fireworks.push({
-                            x: cx + (Math.random() - 0.5) * 50, // 稍微錯開每波的爆發原點
+                            x: cx + (Math.random() - 0.5) * 50,
                             y: cy + (Math.random() - 0.5) * 50,
                             vx: Math.cos(angle) * speed,
                             vy: Math.sin(angle) * speed,
                             life: 1.0,
-                            decay: Math.random() * 0.02 + 0.01, // 衰減速度加快一倍，讓煙火更快消失
+                            decay: Math.random() * 0.02 + 0.01,
                             color: colors[Math.floor(Math.random() * colors.length)],
-                            size: Math.random() * 4 + 2 // 粒子大小不一
+                            size: Math.random() * 4 + 2
                         });
                     }
-                }, wave * 150); // 每波間隔縮短為 150 毫秒
+                }, wave * 150);
             }
         }
 
@@ -458,10 +469,13 @@
             if (draggedPiece) {
                 const timeElapsed = Date.now() - pointerDownTime;
                 
+                // 點擊判定：無明顯移動且時間短於300毫秒
                 if (!isDragging && timeElapsed < 300) {
                     draggedPiece.rotation = (draggedPiece.rotation + 90) % 360;
+                    playSnd(sndRotate); // 播放旋轉音效
                 }
 
+                // 只有角度為 0 時才能貼合
                 if (draggedPiece.rotation === 0) {
                     const abs = getPieceAbs(draggedPiece);
                     const diffX = Math.abs(draggedPiece.x - abs.tx);
@@ -476,17 +490,27 @@
                         draggedPiece.y = abs.ty;
                         draggedPiece.locked = true;
                         
+                        let isZoneCompletedNow = false;
+
                         // 檢查是否當前區塊碎片已全數歸位
                         if (currentActiveZone) {
                             const activePieces = pieces.filter(p => p.zoneId === currentActiveZone.id);
                             const isZoneDone = activePieces.length > 0 && activePieces.every(p => p.locked);
                             
                             if (isZoneDone) {
+                                isZoneCompletedNow = true;
                                 currentActiveZone.completed = true;  
                                 currentActiveZone.glowUntil = Date.now() + 10000; // 設定 10 秒後消失
                                 triggerFireworks(currentActiveZone); 
                                 currentActiveZone = null;            
                             }
+                        }
+
+                        // 如果整個區塊完成播放歡樂音樂，否則播放碎片放入的和弦音效
+                        if (isZoneCompletedNow) {
+                            playSnd(sndComplete);
+                        } else {
+                            playSnd(sndLock);
                         }
 
                         checkWinCondition();
@@ -629,7 +653,7 @@
                     ctx.save();
                     ctx.translate(mc.cx, mc.cy);
                     
-                    // 彈出與脈動效果 (配合縮短的 90 timer 重新計算縮放)
+                    // 彈出與脈動效果
                     let scale = 1;
                     if (mc.timer > 75) {
                         scale = 1 + (90 - mc.timer) * 0.05; // 快速彈出
