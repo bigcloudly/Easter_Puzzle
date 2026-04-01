@@ -116,9 +116,7 @@
             BOARD_X = (canvas.width - BOARD_W) / 2;
             BOARD_Y = (canvas.height - BOARD_H) / 2 + 20;
 
-            // 5% 誤差容忍度
-            ERROR_MARGIN_X = BOARD_W * 0.03;
-            ERROR_MARGIN_Y = BOARD_H * 0.03;
+            // 移除原本基於整個拼圖板的誤差設定，改為在放開拼圖時動態計算單一碎片的 5%
         }
 
         window.addEventListener('resize', resizeCanvas);
@@ -434,7 +432,11 @@
                     const diffX = Math.abs(draggedPiece.x - abs.tx);
                     const diffY = Math.abs(draggedPiece.y - abs.ty);
 
-                    if (diffX <= ERROR_MARGIN_X && diffY <= ERROR_MARGIN_Y) {
+                    // 誤差容忍度：該碎片本身寬度與高度的 5%
+                    const marginX = abs.w * 0.05;
+                    const marginY = abs.h * 0.05;
+
+                    if (diffX <= marginX && diffY <= marginY) {
                         draggedPiece.x = abs.tx;
                         draggedPiece.y = abs.ty;
                         draggedPiece.locked = true;
