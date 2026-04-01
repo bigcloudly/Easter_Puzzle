@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>宏恩長老教會主日學2026復活節闖關活動</title>
+    <title>Canvas 拼圖遊戲</title>
     <style>
         html, body {
             width: 100%;
@@ -11,8 +11,22 @@
             margin: 0;
             padding: 0;
             overflow: hidden; /* 防止出現滾動條 */
-            background-color: #222; /* 深色背景讓發光效果更明顯 */
+            background-color: #ffffff; /* 調整為白色背景 */
             font-family: sans-serif;
+        }
+        /* 新增標題樣式 */
+        #gameTitle {
+            position: absolute;
+            top: 20px;
+            left: 0;
+            width: 100%;
+            text-align: center;
+            font-size: 32px;
+            color: #333;
+            pointer-events: none; /* 避免擋住滑鼠點擊 */
+            margin: 0;
+            z-index: 10;
+            text-shadow: 2px 2px 4px rgba(255, 255, 255, 0.8);
         }
         canvas {
             display: block;
@@ -27,7 +41,7 @@
             transform: translate(-50%, -50%);
             font-size: 24px;
             font-weight: bold;
-            color: #fff;
+            color: #333; /* 調整為深色以適應白底 */
             display: none;
             pointer-events: none;
         }
@@ -35,6 +49,7 @@
 </head>
 <body>
 
+    <h1 id="gameTitle">宏恩長老教會主日學2026復活節闖關活動</h1>
     <div id="loading">載入圖片中...</div>
     <canvas id="gameCanvas"></canvas>
 
@@ -87,18 +102,18 @@
             const imgAspect = img.width / img.height;
             const screenAspect = canvas.width / canvas.height;
 
-            // 讓拼圖板佔據畫面的 90%
+            // 讓拼圖板佔據畫面的 85% 以保留上方標題空間
             if (screenAspect > imgAspect) {
-                BOARD_H = canvas.height * 0.9;
+                BOARD_H = canvas.height * 0.85;
                 BOARD_W = BOARD_H * imgAspect;
             } else {
                 BOARD_W = canvas.width * 0.9;
                 BOARD_H = BOARD_W / imgAspect;
             }
 
-            // 置中顯示
+            // 置中顯示，將 Y 軸稍微往下移避開標題
             BOARD_X = (canvas.width - BOARD_W) / 2;
-            BOARD_Y = (canvas.height - BOARD_H) / 2;
+            BOARD_Y = (canvas.height - BOARD_H) / 2 + 20;
 
             // 10% 誤差容忍度
             ERROR_MARGIN_X = BOARD_W * 0.1;
@@ -289,18 +304,24 @@
             }
 
             // 2. 判斷是否點擊大區塊
-            for (let i = 0; i < zones.length; i++) {
-                const z = zones[i];
-                const zx = BOARD_X + z.x * BOARD_W;
-                const zy = BOARD_Y + z.y * BOARD_H;
-                const zw = z.w * BOARD_W;
-                const zh = z.h * BOARD_H;
+            // 先檢查目前是否有正在進行（尚未完成）的拼圖碎片
+            const hasActivePieces = pieces.some(p => !p.locked);
 
-                if (!z.clicked && pos.x >= zx && pos.x <= zx + zw && pos.y >= zy && pos.y <= zy + zh) {
-                    generatePieces(z);
-                    hoveredZone = null;
-                    canvas.style.cursor = 'default';
-                    return;
+            // 若沒有尚未完成的碎片，才允許點選新的區塊
+            if (!hasActivePieces) {
+                for (let i = 0; i < zones.length; i++) {
+                    const z = zones[i];
+                    const zx = BOARD_X + z.x * BOARD_W;
+                    const zy = BOARD_Y + z.y * BOARD_H;
+                    const zw = z.w * BOARD_W;
+                    const zh = z.h * BOARD_H;
+
+                    if (!z.clicked && pos.x >= zx && pos.x <= zx + zw && pos.y >= zy && pos.y <= zy + zh) {
+                        generatePieces(z);
+                        hoveredZone = null;
+                        canvas.style.cursor = 'default';
+                        return;
+                    }
                 }
             }
         });
@@ -318,19 +339,25 @@
                 draggedPiece.y = pos.y - dragOffsetY;
             } else {
                 let foundHover = false;
-                for (let i = 0; i < zones.length; i++) {
-                    const z = zones[i];
-                    if (z.clicked) continue;
-                    const zx = BOARD_X + z.x * BOARD_W;
-                    const zy = BOARD_Y + z.y * BOARD_H;
-                    const zw = z.w * BOARD_W;
-                    const zh = z.h * BOARD_H;
+                
+                // 若有尚未完成的碎片，其他區塊不可互動 (取消 Hover 效果)
+                const hasActivePieces = pieces.some(p => !p.locked);
 
-                    if (pos.x >= zx && pos.x <= zx + zw && pos.y >= zy && pos.y <= zy + zh) {
-                        hoveredZone = z;
-                        canvas.style.cursor = 'pointer';
-                        foundHover = true;
-                        break;
+                if (!hasActivePieces) {
+                    for (let i = 0; i < zones.length; i++) {
+                        const z = zones[i];
+                        if (z.clicked) continue;
+                        const zx = BOARD_X + z.x * BOARD_W;
+                        const zy = BOARD_Y + z.y * BOARD_H;
+                        const zw = z.w * BOARD_W;
+                        const zh = z.h * BOARD_H;
+
+                        if (pos.x >= zx && pos.x <= zx + zw && pos.y >= zy && pos.y <= zy + zh) {
+                            hoveredZone = z;
+                            canvas.style.cursor = 'pointer';
+                            foundHover = true;
+                            break;
+                        }
                     }
                 }
 
@@ -380,9 +407,10 @@
                         const zx = BOARD_X + z.x * BOARD_W, zy = BOARD_Y + z.y * BOARD_H;
                         const zw = z.w * BOARD_W, zh = z.h * BOARD_H;
 
-                        ctx.fillStyle = (hoveredZone === z) ? 'rgba(52, 152, 219, 0.4)' : 'rgba(255, 255, 255, 0.05)';
+                        // 調整白底時的未點擊區塊顏色
+                        ctx.fillStyle = (hoveredZone === z) ? 'rgba(52, 152, 219, 0.4)' : 'rgba(0, 0, 0, 0.05)';
                         ctx.fillRect(zx, zy, zw, zh);
-                        ctx.strokeStyle = '#555';
+                        ctx.strokeStyle = '#888';
                         ctx.lineWidth = 2;
                         ctx.strokeRect(zx, zy, zw, zh);
                     }
