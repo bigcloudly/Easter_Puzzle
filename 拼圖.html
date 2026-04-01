@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Canvas 拼圖遊戲</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            background-color: #f0f0f0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 {
+            margin-top: 0;
+            color: #333;
+        }
+        .instructions {
+            text-align: center;
+            margin-bottom: 20px;
+            color: #555;
+            line-height: 1.5;
+        }
+        /* 讓 Canvas 在小螢幕上也能自適應縮放 */
+        canvas {
+            background-color: #fff;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            border: 2px solid #333;
+            max-width: 100%;
+            height: auto;
+            touch-action: none; /* 防止觸控裝置拖曳時滾動頁面 */
+        }
+        #loading {
+            position: absolute;
+            top: 50%;
+            font-size: 24px;
+            font-weight: bold;
+            color: #666;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>合力拼圖遊戲 (Canvas 版)</h1>
+    <div class="instructions">
+        1. 點擊拼圖板上的半透明區塊（共5組，每組切為 9 片）<br>
+        2. 從下方托盤拖曳散落的拼圖到正確位置（誤差 10% 內會自動貼合）
+    </div>
+    
+    <div id="loading">載入圖片中...</div>
+    <canvas id="gameCanvas" width="800" height="650"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const loadingText = document.getElementById('loading');
+
+        // 尺寸設定
+        const BOARD_W = 800;
+        const BOARD_H = 450;
+        const TRAY_Y = 450;
+        const TRAY_H = 200;
+
+        // 10% 誤差容忍度
+        const ERROR_MARGIN_X = BOARD_W * 0.1;
+        const ERROR_MARGIN_Y = BOARD_H * 0.1;
+
+        // 載入圖片
+        const img = new Image();
+        img.src = '127627.jpg';
+
+        // 遊戲狀態與資料
+        let pieces = [];
+        let draggedPiece = null;
+        let dragOffsetX = 0;
+        let dragOffsetY = 0;
+        let hoveredZone = null;
+
+        // 定義5大區塊 (依照新圖片的版面切割設計)
+        const zones = [
+            { id: 1, x: 0,   y: 0,   w: 0.7, h: 0.3, clicked: false }, // 上方偏左區塊 (Top-Left)
+            { id: 2, x: 0.7, y: 0,   w: 0.3, h: 0.7, clicked: false }, // 右方偏上區塊 (Top-Right)
+            { id: 3, x: 0.3, y: 0.7, w: 0.7, h: 0.3, clicked: false }, // 下方偏右區塊 (Bottom-Right)
+            { id: 4, x: 0,   y: 0.3, w: 0.3, h: 0.7, clicked: false }, // 左方偏下區塊 (Bottom-Left)
+            { id: 5, x: 0.3, y: 0.3, w: 0.4, h: 0.4, clicked: false }  // 正中間區塊 (Center)
+        ];
+
+        // 圖片載入完成後啟動遊戲
+        img.onload = () => {
+            loadingText.style.display = 'none';
+            requestAnimationFrame(gameLoop);
+        };
+
+        img.onerror = () => {
+            loadingText.innerText = "圖片載入失敗，使用測試底圖";
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = 800; tempCanvas.height = 450;
+            const tCtx = tempCanvas.getContext('2d');
+            tCtx.fillStyle = '#add8e6'; tCtx.fillRect(0,0,800,450);
+            tCtx.fillStyle = '#000'; tCtx.font = '40px Arial';
+            tCtx.fillText("測試底圖 (找不到 127627.jpg)", 150, 225);
+            img.src = tempCanvas.toDataURL();
+        };
+
+        // 取得精確座標
+        function getPointerPos(e) {
+            const rect = canvas.getBoundingClientRect();
+            const clientX = e.clientX ?? e.touches[0].clientX;
+            const clientY = e.clientY ?? e.touches[0].clientY;
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            return {
+                x: (clientX - rect.left) * scaleX,
+                y: (clientY - rect.top) * scaleY
+            };
+        }
+
+        // 繪製單一拼圖邊緣 (使用貝茲曲線產生凹凸卡榫)
+        function drawJigsawEdge(ctx, x1, y1, x2, y2, edgeType) {
+            if (edgeType === 0) {
+                ctx.lineTo(x2, y2);
+                return;
+            }
+            
+            const dx = x2 - x1;
+            const dy = y2 - y1;
+            const len = Math.hypot(dx, dy);
+            const dirX = dx / len;
+            const dirY = dy / len;
+            
+            // 法向量 (向外)
+            const normX = dirY;
+            const normY = -dirX;
+            const sign = edgeType; // 1 為凸(Out), -1 為凹(In)
+            
+            // 根據相對距離 d (0~1) 與法向偏移 n 取得絕對座標
+            const pt = (d, n) => ({
+                x: x1 + dirX * d * len + normX * sign * n * len,
+                y: y1 + dirY * d * len + normY * sign * n * len
+            });
+
+            // 繪製經典拼圖卡榫形狀
+            ctx.lineTo(pt(0.38, 0).x, pt(0.38, 0).y);
+            ctx.bezierCurveTo(
+                pt(0.40, 0.05).x, pt(0.40, 0.05).y,
+                pt(0.30, 0.20).x, pt(0.30, 0.20).y,
+                pt(0.50, 0.20).x, pt(0.50, 0.20).y
+            );
+            ctx.bezierCurveTo(
+                pt(0.70, 0.20).x, pt(0.70, 0.20).y,
+                pt(0.60, 0.05).x, pt(0.60, 0.05).y,
+                pt(0.62, 0).x, pt(0.62, 0).y
+            );
+            ctx.lineTo(x2, y2);
+        }
+
+        // 建立拼圖的完整路徑
+        function buildPiecePath(ctx, baseX, baseY, w, h, edges) {
+            ctx.beginPath();
+            ctx.moveTo(baseX, baseY);
+            drawJigsawEdge(ctx, baseX, baseY, baseX + w, baseY, edges.top); // 上
+            drawJigsawEdge(ctx, baseX + w, baseY, baseX + w, baseY + h, edges.right); // 右
+            drawJigsawEdge(ctx, baseX + w, baseY + h, baseX, baseY + h, edges.bottom); // 下
+            drawJigsawEdge(ctx, baseX, baseY + h, baseX, baseY, edges.left); // 左
+            ctx.closePath();
+        }
+
+        // 點擊大區塊後，產生該區塊的小拼圖
+        function generatePieces(zone) {
+            zone.clicked = true;
+            
+            // 每個區塊切成 3x3 = 9 片
+            const cols = 3;
+            const rows = 3;
+
+            const zx = zone.x * BOARD_W;
+            const zy = zone.y * BOARD_H;
+            const zw = zone.w * BOARD_W;
+            const zh = zone.h * BOARD_H;
+
+            const pw = zw / cols;
+            const ph = zh / rows;
+
+            // 隨機產生相鄰邊緣的凹凸屬性 (1為凸, -1為凹)
+            const hEdges = []; 
+            for (let r = 0; r < rows - 1; r++) {
+                const row = [];
+                for (let c = 0; c < cols; c++) {
+                    row.push(Math.random() > 0.5 ? 1 : -1);
+                }
+                hEdges.push(row);
+            }
+
+            const vEdges = []; 
+            for (let r = 0; r < rows; r++) {
+                const row = [];
+                for (let c = 0; c < cols - 1; c++) {
+                    row.push(Math.random() > 0.5 ? 1 : -1);
+                }
+                vEdges.push(row);
+            }
+
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols; c++) {
+                    const targetX = zx + c * pw;
+                    const targetY = zy + r * ph;
+
+                    // 定義四邊屬性 (外框為平邊 0，內側與相鄰拼圖相反)
+                    const topEdge = (r === 0) ? 0 : -hEdges[r-1][c];
+                    const bottomEdge = (r === rows - 1) ? 0 : hEdges[r][c];
+                    const leftEdge = (c === 0) ? 0 : -vEdges[r][c-1];
+                    const rightEdge = (c === cols - 1) ? 0 : vEdges[r][c];
+
+                    // 隨機掉落到下方托盤區
+                    const randomX = Math.max(10, Math.random() * (BOARD_W - pw - 20));
+                    const randomY = TRAY_Y + 10 + Math.random() * (TRAY_H - ph - 20);
+
+                    pieces.push({
+                        tx: targetX, ty: targetY, 
+                        w: pw, h: ph,             
+                        x: randomX, y: randomY,   
+                        locked: false,
+                        edges: { top: topEdge, bottom: bottomEdge, left: leftEdge, right: rightEdge }
+                    });
+                }
+            }
+        }
+
+        // --- 事件監聽 ---
+        
+        canvas.addEventListener('pointerdown', (e) => {
+            const pos = getPointerPos(e);
+
+            // 1. 優先判斷是否點擊到散落的小拼圖 (使用路徑檢測，比對更精準)
+            for (let i = pieces.length - 1; i >= 0; i--) {
+                const p = pieces[i];
+                if (!p.locked) {
+                    buildPiecePath(ctx, p.x, p.y, p.w, p.h, p.edges);
+                    if (ctx.isPointInPath(pos.x, pos.y)) {
+                        draggedPiece = p;
+                        dragOffsetX = pos.x - p.x;
+                        dragOffsetY = pos.y - p.y;
+                        
+                        // 將拖曳中的拼圖移到最上層
+                        pieces.splice(i, 1);
+                        pieces.push(p);
+                        
+                        canvas.style.cursor = 'grabbing';
+                        return;
+                    }
+                }
+            }
+
+            // 2. 判斷是否點擊到大區塊
+            for (let i = 0; i < zones.length; i++) {
+                const z = zones[i];
+                const zx = z.x * BOARD_W;
+                const zy = z.y * BOARD_H;
+                const zw = z.w * BOARD_W;
+                const zh = z.h * BOARD_H;
+
+                if (!z.clicked && pos.x >= zx && pos.x <= zx + zw && pos.y >= zy && pos.y <= zy + zh) {
+                    generatePieces(z);
+                    hoveredZone = null;
+                    canvas.style.cursor = 'default';
+                    return;
+                }
+            }
+        });
+
+        canvas.addEventListener('pointermove', (e) => {
+            const pos = getPointerPos(e);
+
+            if (draggedPiece) {
+                draggedPiece.x = pos.x - dragOffsetX;
+                draggedPiece.y = pos.y - dragOffsetY;
+            } else {
+                let foundHover = false;
+                for (let i = 0; i < zones.length; i++) {
+                    const z = zones[i];
+                    if (z.clicked) continue;
+                    const zx = z.x * BOARD_W;
+                    const zy = z.y * BOARD_H;
+                    const zw = z.w * BOARD_W;
+                    const zh = z.h * BOARD_H;
+
+                    if (pos.x >= zx && pos.x <= zx + zw && pos.y >= zy && pos.y <= zy + zh) {
+                        hoveredZone = z;
+                        canvas.style.cursor = 'pointer';
+                        foundHover = true;
+                        break;
+                    }
+                }
+
+                if (!foundHover) {
+                    hoveredZone = null;
+                    let onPiece = false;
+                    for (let i = pieces.length - 1; i >= 0; i--) {
+                        const p = pieces[i];
+                        if (!p.locked) {
+                            buildPiecePath(ctx, p.x, p.y, p.w, p.h, p.edges);
+                            if (ctx.isPointInPath(pos.x, pos.y)) {
+                                onPiece = true;
+                                break;
+                            }
+                        }
+                    }
+                    canvas.style.cursor = onPiece ? 'grab' : 'default';
+                }
+            }
+        });
+
+        window.addEventListener('pointerup', () => {
+            if (draggedPiece) {
+                const diffX = Math.abs(draggedPiece.x - draggedPiece.tx);
+                const diffY = Math.abs(draggedPiece.y - draggedPiece.ty);
+
+                if (diffX <= ERROR_MARGIN_X && diffY <= ERROR_MARGIN_Y) {
+                    draggedPiece.x = draggedPiece.tx;
+                    draggedPiece.y = draggedPiece.ty;
+                    draggedPiece.locked = true;
+                }
+
+                draggedPiece = null;
+                canvas.style.cursor = 'default';
+            }
+        });
+
+        // --- 遊戲渲染迴圈 ---
+        function gameLoop() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 1. 繪製托盤區背景
+            ctx.fillStyle = '#e0e0e0';
+            ctx.fillRect(0, TRAY_Y, BOARD_W, TRAY_H);
+            ctx.beginPath();
+            ctx.moveTo(0, TRAY_Y);
+            ctx.lineTo(BOARD_W, TRAY_Y);
+            ctx.strokeStyle = '#999';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 5]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.fillStyle = '#666';
+            ctx.font = '20px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText("散落的拼圖托盤區", BOARD_W / 2, TRAY_Y + 100);
+
+            // 2. 繪製尚未點擊的大區塊
+            zones.forEach(z => {
+                if (!z.clicked) {
+                    const zx = z.x * BOARD_W, zy = z.y * BOARD_H;
+                    const zw = z.w * BOARD_W, zh = z.h * BOARD_H;
+
+                    ctx.fillStyle = (hoveredZone === z) ? 'rgba(52, 152, 219, 0.4)' : 'rgba(255, 255, 255, 0.1)';
+                    ctx.fillRect(zx, zy, zw, zh);
+                    ctx.strokeStyle = '#2c3e50';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(zx, zy, zw, zh);
+                }
+            });
+
+            // 3. 繪製拼圖碎片
+            pieces.forEach(p => {
+                ctx.save();
+                
+                // 將原點移動到碎片的相對偏移位置
+                ctx.translate(p.x - p.tx, p.y - p.ty);
+                
+                // 建立該碎片的圖形路徑
+                buildPiecePath(ctx, p.tx, p.ty, p.w, p.h, p.edges);
+                
+                // 陰影設定與填色 (讓陰影基於路徑正確投射)
+                if (p === draggedPiece) {
+                    ctx.shadowColor = 'rgba(0,0,0,0.5)';
+                    ctx.shadowBlur = 10;
+                    ctx.shadowOffsetX = 5;
+                    ctx.shadowOffsetY = 5;
+                } else if (!p.locked) {
+                    ctx.shadowColor = 'rgba(0,0,0,0.3)';
+                    ctx.shadowBlur = 4;
+                    ctx.shadowOffsetX = 2;
+                    ctx.shadowOffsetY = 2;
+                }
+                ctx.fillStyle = "white"; 
+                ctx.fill(); // 填滿以顯示陰影
+                
+                // 清除陰影，準備繪製圖片
+                ctx.shadowColor = 'transparent';
+                ctx.shadowBlur = 0;
+                
+                ctx.save();
+                ctx.clip(); // 根據拼圖形狀裁剪
+                ctx.drawImage(img, 0, 0, BOARD_W, BOARD_H); // 直接畫整張圖，會因為clip自動取對應區域
+                ctx.restore();
+
+                // 繪製拼圖外框線
+                if (!p.locked) {
+                    ctx.strokeStyle = 'white';
+                    ctx.lineWidth = 1.5;
+                    ctx.stroke();
+                } else {
+                    // 已鎖定的拼圖給予淡淡的接縫線
+                    ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+                    ctx.lineWidth = 1;
+                    ctx.stroke();
+                }
+
+                ctx.restore();
+            });
+
+            requestAnimationFrame(gameLoop);
+        }
+    </script>
+</body>
+</html>
