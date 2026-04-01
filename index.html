@@ -72,6 +72,7 @@
         let dragOffsetX = 0;
         let dragOffsetY = 0;
         let hoveredZone = null;
+        let currentActiveZone = null; // 新增：追蹤目前正在進行拼圖的區塊
         
         // 點擊判定用
         let pointerDownPos = { x: 0, y: 0 };
@@ -202,9 +203,65 @@
             ctx.closePath();
         }
 
+        // 獨立繪製單一碎片的函式
+        function drawPiece(p) {
+            const abs = getPieceAbs(p);
+
+            // 鎖定狀態強制歸位(避免視窗縮放導致錯位)
+            if (p.locked) {
+                p.x = abs.tx; p.y = abs.ty;
+            }
+
+            ctx.save();
+            
+            // 以碎片中心點做旋轉
+            ctx.translate(p.x + abs.w/2, p.y + abs.h/2);
+            ctx.rotate(p.rotation * Math.PI / 180);
+            ctx.translate(-(abs.tx + abs.w/2), -(abs.ty + abs.h/2));
+            
+            buildPiecePath(ctx, abs.tx, abs.ty, abs.w, abs.h, p.edges);
+            
+            // 陰影投射
+            if (p === draggedPiece) {
+                ctx.shadowColor = 'rgba(0,0,0,0.8)';
+                ctx.shadowBlur = 15;
+                ctx.shadowOffsetX = 8;
+                ctx.shadowOffsetY = 8;
+            } else if (!p.locked) {
+                ctx.shadowColor = 'rgba(0,0,0,0.5)';
+                ctx.shadowBlur = 6;
+                ctx.shadowOffsetX = 3;
+                ctx.shadowOffsetY = 3;
+            }
+            ctx.fillStyle = "white"; 
+            ctx.fill(); 
+            
+            ctx.shadowColor = 'transparent';
+            
+            // 貼上圖片
+            ctx.save();
+            ctx.clip(); 
+            ctx.drawImage(img, 0, 0, img.width, img.height, BOARD_X, BOARD_Y, BOARD_W, BOARD_H);
+            ctx.restore();
+
+            // 外框線
+            if (!p.locked) {
+                ctx.strokeStyle = 'white';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            } else {
+                ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+            }
+
+            ctx.restore();
+        }
+
         // 點擊大區塊產生小拼圖
         function generatePieces(zone) {
             zone.clicked = true;
+            currentActiveZone = zone; // 設定當前作用中的區塊
             
             const cols = 3;
             const rows = 3;
@@ -304,7 +361,6 @@
             }
 
             // 2. 判斷是否點擊大區塊
-            // 先檢查目前是否有正在進行（尚未完成）的拼圖碎片
             const hasActivePieces = pieces.some(p => !p.locked);
 
             // 若沒有尚未完成的碎片，才允許點選新的區塊
@@ -331,7 +387,6 @@
             const pos = getPointerPos(e);
 
             if (draggedPiece) {
-                // 如果移動距離超過 5px 判定為拖曳而非單純點擊
                 if (Math.hypot(pos.x - pointerDownPos.x, pos.y - pointerDownPos.y) > 5) {
                     isDragging = true;
                 }
@@ -339,8 +394,6 @@
                 draggedPiece.y = pos.y - dragOffsetY;
             } else {
                 let foundHover = false;
-                
-                // 若有尚未完成的碎片，其他區塊不可互動 (取消 Hover 效果)
                 const hasActivePieces = pieces.some(p => !p.locked);
 
                 if (!hasActivePieces) {
@@ -372,12 +425,10 @@
             if (draggedPiece) {
                 const timeElapsed = Date.now() - pointerDownTime;
                 
-                // 如果沒有明顯移動且點擊時間短，判定為「點擊旋轉」
                 if (!isDragging && timeElapsed < 300) {
                     draggedPiece.rotation = (draggedPiece.rotation + 90) % 360;
                 }
 
-                // 只有角度為 0 時才能貼合
                 if (draggedPiece.rotation === 0) {
                     const abs = getPieceAbs(draggedPiece);
                     const diffX = Math.abs(draggedPiece.x - abs.tx);
@@ -387,6 +438,13 @@
                         draggedPiece.x = abs.tx;
                         draggedPiece.y = abs.ty;
                         draggedPiece.locked = true;
+                        
+                        // 檢查是否當前區塊碎片已全數歸位
+                        const stillHasActive = pieces.some(p => !p.locked);
+                        if (!stillHasActive) {
+                            currentActiveZone = null; // 清空當前作用中區塊狀態
+                        }
+
                         checkWinCondition();
                     }
                 }
@@ -401,85 +459,66 @@
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
             if (!isWin) {
-                // 1. 繪製尚未點擊的大區塊
+                // 1. 繪製區塊的底色 (包含尚未點擊的預設色與當前作用中的金黃色)
                 zones.forEach(z => {
-                    if (!z.clicked) {
-                        const zx = BOARD_X + z.x * BOARD_W, zy = BOARD_Y + z.y * BOARD_H;
-                        const zw = z.w * BOARD_W, zh = z.h * BOARD_H;
+                    const zx = BOARD_X + z.x * BOARD_W, zy = BOARD_Y + z.y * BOARD_H;
+                    const zw = z.w * BOARD_W, zh = z.h * BOARD_H;
 
-                        // 調整白底時的未點擊區塊顏色
-                        ctx.fillStyle = (hoveredZone === z) ? 'rgba(52, 152, 219, 0.4)' : 'rgba(0, 0, 0, 0.05)';
-                        ctx.fillRect(zx, zy, zw, zh);
-                        ctx.strokeStyle = '#888';
-                        ctx.lineWidth = 2;
-                        ctx.strokeRect(zx, zy, zw, zh);
-                    }
-                });
-
-                // 2. 繪製拼圖碎片
-                pieces.forEach(p => {
-                    const abs = getPieceAbs(p);
-
-                    // 鎖定狀態強制歸位(避免視窗縮放導致錯位)
-                    if (p.locked) {
-                        p.x = abs.tx; p.y = abs.ty;
-                    }
-
-                    ctx.save();
-                    
-                    // 以碎片中心點做旋轉
-                    ctx.translate(p.x + abs.w/2, p.y + abs.h/2);
-                    ctx.rotate(p.rotation * Math.PI / 180);
-                    ctx.translate(-(abs.tx + abs.w/2), -(abs.ty + abs.h/2));
-                    
-                    buildPiecePath(ctx, abs.tx, abs.ty, abs.w, abs.h, p.edges);
-                    
-                    // 陰影投射
-                    if (p === draggedPiece) {
-                        ctx.shadowColor = 'rgba(0,0,0,0.8)';
-                        ctx.shadowBlur = 15;
-                        ctx.shadowOffsetX = 8;
-                        ctx.shadowOffsetY = 8;
-                    } else if (!p.locked) {
-                        ctx.shadowColor = 'rgba(0,0,0,0.5)';
-                        ctx.shadowBlur = 6;
-                        ctx.shadowOffsetX = 3;
-                        ctx.shadowOffsetY = 3;
-                    }
-                    ctx.fillStyle = "white"; 
-                    ctx.fill(); 
-                    
-                    ctx.shadowColor = 'transparent';
-                    
-                    // 貼上圖片
-                    ctx.save();
-                    ctx.clip(); 
-                    ctx.drawImage(img, 0, 0, img.width, img.height, BOARD_X, BOARD_Y, BOARD_W, BOARD_H);
-                    ctx.restore();
-
-                    // 外框線
-                    if (!p.locked) {
-                        ctx.strokeStyle = 'white';
-                        ctx.lineWidth = 2;
-                        ctx.stroke();
+                    if (currentActiveZone) {
+                        if (z === currentActiveZone) {
+                            ctx.fillStyle = 'rgba(255, 215, 0, 0.5)'; // 金黃色底色
+                            ctx.fillRect(zx, zy, zw, zh);
+                            ctx.strokeStyle = '#888';
+                            ctx.lineWidth = 2;
+                            ctx.strokeRect(zx, zy, zw, zh);
+                        } else if (!z.clicked) {
+                            ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+                            ctx.fillRect(zx, zy, zw, zh);
+                            ctx.strokeStyle = '#888';
+                            ctx.lineWidth = 2;
+                            ctx.strokeRect(zx, zy, zw, zh);
+                        }
                     } else {
-                        ctx.strokeStyle = 'rgba(0,0,0,0.1)';
-                        ctx.lineWidth = 1;
-                        ctx.stroke();
+                        if (!z.clicked) {
+                            ctx.fillStyle = (hoveredZone === z) ? 'rgba(52, 152, 219, 0.4)' : 'rgba(0, 0, 0, 0.05)';
+                            ctx.fillRect(zx, zy, zw, zh);
+                            ctx.strokeStyle = '#888';
+                            ctx.lineWidth = 2;
+                            ctx.strokeRect(zx, zy, zw, zh);
+                        }
                     }
-
-                    ctx.restore();
                 });
+
+                // 2. 繪製已經鎖定 (拼好) 的碎片
+                pieces.filter(p => p.locked).forEach(p => drawPiece(p));
+
+                // 3. 繪製白色半透明遮罩 (如果目前有進行中的區塊，遮罩其餘所有的區塊)
+                if (currentActiveZone) {
+                    zones.forEach(z => {
+                        if (z !== currentActiveZone) {
+                            const zx = BOARD_X + z.x * BOARD_W, zy = BOARD_Y + z.y * BOARD_H;
+                            const zw = z.w * BOARD_W, zh = z.h * BOARD_H;
+                            ctx.fillStyle = 'rgba(255, 255, 255, 0.8)'; // 白色半透明覆蓋
+                            ctx.fillRect(zx, zy, zw, zh);
+                        }
+                    });
+                }
+
+                // 4. 繪製尚未鎖定的碎片 (確保畫在白色遮罩的上方，避免混淆)
+                pieces.filter(p => !p.locked && p !== draggedPiece).forEach(p => drawPiece(p));
+                
+                // 5. 繪製正在拖曳的碎片 (確保在畫面最頂層)
+                if (draggedPiece) drawPiece(draggedPiece);
+
             } else {
                 // 通關動畫：放大圖片並加上金色光暈
-                winScale += (1.05 - winScale) * 0.05; // 平滑縮放至 1.05 倍
-                winGlow += 0.05; // 光暈閃爍計時
+                winScale += (1.05 - winScale) * 0.05; 
+                winGlow += 0.05; 
 
                 ctx.save();
                 ctx.translate(canvas.width / 2, canvas.height / 2);
                 ctx.scale(winScale, winScale);
                 
-                // 動態發光效果
                 ctx.shadowColor = `rgba(255, 215, 0, ${0.5 + Math.sin(winGlow)*0.4})`;
                 ctx.shadowBlur = 40;
                 ctx.shadowOffsetX = 0;
